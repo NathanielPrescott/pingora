@@ -129,6 +129,7 @@ pub struct Bucket<T> {
 }
 
 const SMALL_QUEUE_PERCENTAGE: f32 = 0.1;
+const GOAT_QUEUE_PERCENTAGE: f32 = 0.9;
 
 struct FiFoQueues<T> {
     total_weight_limit: usize,
@@ -138,6 +139,9 @@ struct FiFoQueues<T> {
 
     main: SegQueue<Key>,
     main_weight: AtomicUsize,
+
+    goat: SegQueue<Key>,
+    goat_weight: AtomicUsize,
 
     // this replaces the ghost queue of S3-FIFO with similar goal: track the evicted assets
     estimator: TinyLfu,
@@ -282,6 +286,10 @@ impl<T: Clone + Send + Sync + 'static> FiFoQueues<T> {
         (self.total_weight_limit as f32 * SMALL_QUEUE_PERCENTAGE).floor() as usize + 1
     }
 
+    fn goat_weight_limit(&self) -> usize {
+        (self.total_weight_limit as f32 * GOAT_QUEUE_PERCENTAGE).floor() as usize + 1
+    }
+
     fn evict_one_from_small(&self, buckets: &Buckets<T>) -> Option<KV<T>> {
         loop {
             let Some(to_evict) = self.small.pop() else {
@@ -351,6 +359,35 @@ impl<T: Clone + Send + Sync + 'static> FiFoQueues<T> {
             }
         }
     }
+
+    // TODO: check goat lowest weight add evicted main if higher than lowest goat weight
+    fn evict_one_from_goat(&self, buckets: &Buckets<T>) -> Option<KV<T>> {
+        loop {
+            let to_evict = self.goat.pop()?;
+
+            if let Some(v) = buckets
+                .get_map(&to_evict, |bucket| {
+                    if bucket.uses.decr_uses() > 0 {
+                        self.goat.push(to_evict);
+                        None
+                    } else {
+                        let weight = bucket.weight;
+                        self.goat_weight.fetch_sub(weight as usize, SeqCst);
+                        let data = bucket.data.clone();
+                        buckets.remove(&to_evict);
+                        Some(KV {
+                            key: to_evict,
+                            data,
+                            weight
+                        })
+                    }
+                })
+                .flatten()
+            {
+                return Some(v);
+            }
+        }
+    }
 }
 
 /// [TinyUfo] cache
@@ -369,6 +406,8 @@ impl<K: Hash, T: Clone + Send + Sync + 'static> TinyUfo<K, T> {
             small_weight: 0.into(),
             main: SegQueue::new(),
             main_weight: 0.into(),
+            goat: SegQueue::new(),
+            goat_weight: 0.into(),
             total_weight_limit,
             estimator: TinyLfu::new(estimated_size),
             _t: PhantomData,
@@ -391,6 +430,8 @@ impl<K: Hash, T: Clone + Send + Sync + 'static> TinyUfo<K, T> {
             small_weight: 0.into(),
             main: SegQueue::new(),
             main_weight: 0.into(),
+            goat: SegQueue::new(),
+            goat_weight: 0.into(),
             total_weight_limit,
             estimator: TinyLfu::new_compact(estimated_size),
             _t: PhantomData,
