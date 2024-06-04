@@ -56,6 +56,10 @@ impl Location {
     fn move_to_main(&self) {
         self.0.store(true, Relaxed);
     }
+
+    fn move_to_goat(&self) {
+        self.0.store(true, Relaxed);
+    }
 }
 
 // We have 8 bits to spare but we still cap at 3. This is to make sure that the main queue
@@ -129,7 +133,7 @@ pub struct Bucket<T> {
 }
 
 const SMALL_QUEUE_PERCENTAGE: f32 = 0.1;
-const GOAT_QUEUE_PERCENTAGE: f32 = 0.9;
+const GOAT_QUEUE_PERCENTAGE: f32 = 0.1;
 
 struct FiFoQueues<T> {
     total_weight_limit: usize,
@@ -142,6 +146,7 @@ struct FiFoQueues<T> {
 
     goat: SegQueue<Key>,
     goat_weight: AtomicUsize,
+    goat_min_uses: u8,
 
     // this replaces the ghost queue of S3-FIFO with similar goal: track the evicted assets
     estimator: TinyLfu,
@@ -249,41 +254,56 @@ impl<T: Clone + Send + Sync + 'static> FiFoQueues<T> {
     // admission. It is used when calling `evict_to_limit` before admitting the asset itself.
     fn evict_to_limit(&self, extra_weight: Weight, buckets: &Buckets<T>) -> Vec<KV<T>> {
         let mut evicted = if self.total_weight_limit
-            < self.small_weight.load(SeqCst) + self.main_weight.load(SeqCst) + extra_weight as usize
+            < self.small_weight.load(SeqCst) + self.main_weight.load(SeqCst) + self.goat_weight.load(SeqCst) + extra_weight as usize
         {
             Vec::with_capacity(1)
         } else {
             vec![]
         };
         while self.total_weight_limit
-            < self.small_weight.load(SeqCst) + self.main_weight.load(SeqCst) + extra_weight as usize
+            < self.small_weight.load(SeqCst) + self.main_weight.load(SeqCst) + self.goat_weight.load(SeqCst) + extra_weight as usize
         {
             if let Some(evicted_item) = self.evict_one(buckets) {
                 evicted.push(evicted_item);
             } else {
-                break;
+                // break;
             }
+
+            let current_weight = self.small_weight.load(SeqCst) + self.main_weight.load(SeqCst) + self.goat_weight.load(SeqCst) + extra_weight as usize;
+            println!("Post weight: {:?}", current_weight);
         }
+
+        println!("Cache weight: {:?}", self.small_weight.load(SeqCst) + self.main_weight.load(SeqCst) + self.goat_weight.load(SeqCst) + extra_weight as usize);
 
         evicted
     }
 
     fn evict_one(&self, buckets: &Buckets<T>) -> Option<KV<T>> {
+        // println!("Small weight limit: {:?}", self.small_weight_limit());
+        // println!("Small load: {:?}", self.small_weight.load(SeqCst));
+        // println!("Main weight limit: {:?}", self.main_weight_limit());
+        // println!("Main load: {:?}", self.main_weight.load(SeqCst));
+        // println!("Goat weight limit: {:?}", self.goat_weight_limit());
+        // println!("Goat load: {:?}", self.goat_weight.load(SeqCst));
+        // println!("Small + Goat limit: {:?}", self.goat_weight_limit() + self.small_weight_limit());
         let evict_small = self.small_weight_limit() <= self.small_weight.load(SeqCst);
+        let evict_main = self.main_weight_limit() <= self.main_weight.load(SeqCst);
 
         if evict_small {
-            let evicted = self.evict_one_from_small(buckets);
-            // evict_one_from_small could just promote everything to main without evicting any
-            // so need to evict_one_from_main if nothing evicted
-            if evicted.is_some() {
-                return evicted;
-            }
+            return self.evict_one_from_small(buckets);
+        } else if evict_main {
+            return self.evict_one_from_main(buckets);
         }
-        self.evict_one_from_main(buckets)
+
+        self.evict_one_from_goat(buckets)
     }
 
     fn small_weight_limit(&self) -> usize {
         (self.total_weight_limit as f32 * SMALL_QUEUE_PERCENTAGE).floor() as usize + 1
+    }
+
+    fn main_weight_limit(&self) -> usize {
+        (self.total_weight_limit as f32 - (self.small_weight_limit() + self.goat_weight_limit()) as f32).floor() as usize
     }
 
     fn goat_weight_limit(&self) -> usize {
@@ -334,16 +354,36 @@ impl<T: Clone + Send + Sync + 'static> FiFoQueues<T> {
 
             if let Some(v) = buckets
                 .get_map(&to_evict, |bucket| {
+                    let weight = bucket.weight;
+                    // TODO: Potentially add main to goat
+
+                    let new_weight = bucket.uses.uses();
+
                     if bucket.uses.decr_uses() > 0 {
-                        // put it back
+                        // move to goat if uses bigger
+                        if self.goat_min_uses <= bucket.uses.uses() {
+                            bucket.queue.move_to_goat();
+                            self.goat.push(to_evict);
+                            self.goat_weight.fetch_add(weight as usize, SeqCst);
+
+                        }
+
                         self.main.push(to_evict);
-                        // continue the loop
+                        // continue until evict found
                         None
                     } else {
+
+                        println!("{:?}", self.goat_weight_limit());
+                        println!("{:?}", self.goat_weight.load(SeqCst));
+                        // if self.goat_weight_limit() <= self.goat_weight.load(SeqCst) {
+                        //     self.goat_weight.fetch_add(weight as usize, SeqCst);
+                        // } else {
+                        //     self.main_weight.fetch_sub(weight as usize, SeqCst);
+                        // }
+
                         // evict
-                        let weight = bucket.weight;
-                        self.main_weight.fetch_sub(weight as usize, SeqCst);
                         let data = bucket.data.clone();
+                        let weight = bucket.weight;
                         buckets.remove(&to_evict);
                         Some(KV {
                             key: to_evict,
@@ -360,33 +400,36 @@ impl<T: Clone + Send + Sync + 'static> FiFoQueues<T> {
         }
     }
 
-    // TODO: check goat lowest weight add evicted main if higher than lowest goat weight
+    // TODO: check goat lowest uses add evicted main if higher than lowest goat uses
     fn evict_one_from_goat(&self, buckets: &Buckets<T>) -> Option<KV<T>> {
-        loop {
-            let to_evict = self.goat.pop()?;
+        println!("evict_one_from_goat TRIGGERED");
 
-            if let Some(v) = buckets
-                .get_map(&to_evict, |bucket| {
-                    if bucket.uses.decr_uses() > 0 {
-                        self.goat.push(to_evict);
-                        None
-                    } else {
-                        let weight = bucket.weight;
-                        self.goat_weight.fetch_sub(weight as usize, SeqCst);
-                        let data = bucket.data.clone();
-                        buckets.remove(&to_evict);
-                        Some(KV {
-                            key: to_evict,
-                            data,
-                            weight
-                        })
-                    }
-                })
-                .flatten()
-            {
-                return Some(v);
-            }
-        }
+        None
+        // loop {
+        //     let to_evict = self.goat.pop()?;
+        //
+        //     if let Some(v) = buckets
+        //         .get_map(&to_evict, |bucket| {
+        //             if bucket.uses.decr_uses() > 0 {
+        //                 self.goat.push(to_evict);
+        //                 None
+        //             } else {
+        //                 let weight = bucket.weight;
+        //                 self.goat_weight.fetch_sub(weight as usize, SeqCst);
+        //                 let data = bucket.data.clone();
+        //                 buckets.remove(&to_evict);
+        //                 Some(KV {
+        //                     key: to_evict,
+        //                     data,
+        //                     weight
+        //                 })
+        //             }
+        //         })
+        //         .flatten()
+        //     {
+        //         return Some(v);
+        //     }
+        // }
     }
 }
 
@@ -408,6 +451,7 @@ impl<K: Hash, T: Clone + Send + Sync + 'static> TinyUfo<K, T> {
             main_weight: 0.into(),
             goat: SegQueue::new(),
             goat_weight: 0.into(),
+            goat_min_uses: 0.into(),
             total_weight_limit,
             estimator: TinyLfu::new(estimated_size),
             _t: PhantomData,
@@ -421,7 +465,7 @@ impl<K: Hash, T: Clone + Send + Sync + 'static> TinyUfo<K, T> {
     }
 
     /// Create a new TinyUfo cache but with more memory efficient data structures.
-    /// The trade-off is that the the get() is slower by a constant factor.
+    /// The trade-off is that the get() is slower by a constant factor.
     /// The cache hit ratio could be higher as this type of TinyUFO allows to store
     /// more assets with the same memory.
     pub fn new_compact(total_weight_limit: usize, estimated_size: usize) -> Self {
@@ -432,6 +476,7 @@ impl<K: Hash, T: Clone + Send + Sync + 'static> TinyUfo<K, T> {
             main_weight: 0.into(),
             goat: SegQueue::new(),
             goat_weight: 0.into(),
+            goat_min_uses: 0.into(),
             total_weight_limit,
             estimator: TinyLfu::new_compact(estimated_size),
             _t: PhantomData,
@@ -665,6 +710,10 @@ mod tests {
         cache.get(&1);
         cache.get(&2);
         cache.get(&2);
+        cache.get(&3);
+        cache.get(&3);
+        cache.get(&3);
+        cache.get(&3);
         cache.get(&3);
         cache.get(&3);
 
