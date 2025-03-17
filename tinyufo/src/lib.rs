@@ -366,6 +366,26 @@ pub struct TinyUfo<K, T: Clone + 'static> {
     _k: PhantomData<K>,
 }
 impl<K: Hash, T: Clone + Send + Sync + 'static + Debug> TinyUfo<K, T> {
+    /// Create a new faster TinyUfo cache with the given weight limit and the given
+    /// size limit of the ghost queue
+    pub fn new_fast(total_weight_limit: usize, estimated_size: usize) -> Self {
+        let queues = FiFoQueues {
+            small: SegQueue::new(),
+            small_weight: 0.into(),
+            main: SegQueue::new(),
+            main_weight: 0.into(),
+            total_weight_limit,
+            estimator: TinyLfu::new(estimated_size),
+            _t: PhantomData,
+        };
+        TinyUfo {
+            queues,
+            buckets: Buckets::new_fast(estimated_size),
+            random_status: RandomState::new(),
+            _k: PhantomData,
+        }
+    }
+
     /// Create a new TinyUfo cache with the given weight limit and the given
     /// size limit of the ghost queue.
     pub fn new(total_weight_limit: usize, estimated_size: usize) -> Self {

@@ -82,6 +82,7 @@ fn main() {
     let lru = Mutex::new(lru::LruCache::<u64, ()>::unbounded());
     let moka = moka::sync::Cache::new(ITEMS as u64 + 10);
     let quick_cache = quick_cache::sync::Cache::new(ITEMS + 10);
+    let tinyufo_fast = tinyufo::TinyUfo::new_fast(ITEMS + 10, 10);
     let tinyufo = tinyufo::TinyUfo::new(ITEMS + 10, 10);
     let tinyufo_compact = tinyufo::TinyUfo::new_compact(ITEMS + 10, 10);
 
@@ -90,6 +91,7 @@ fn main() {
         lru.lock().unwrap().put(i as u64, ());
         moka.insert(i as u64, ());
         quick_cache.insert(i as u64, ());
+        tinyufo_fast.put(i as u64, (), 1);
         tinyufo.put(i as u64, (), 1);
         tinyufo_compact.put(i as u64, (), 1);
     }
@@ -133,6 +135,17 @@ fn main() {
 
     let before = Instant::now();
     for _ in 0..ITERATIONS {
+        tinyufo_fast.get(&(zipf.sample(&mut rng) as u64));
+    }
+    let elapsed = before.elapsed();
+    println!(
+        "tinyufo fast read total {elapsed:?}, {:?} avg per operation, {} ops per second",
+        elapsed / ITERATIONS as u32,
+        (ITERATIONS as f32 / elapsed.as_secs_f32()) as u32
+    );
+
+    let before = Instant::now();
+    for _ in 0..ITERATIONS {
         tinyufo.get(&(zipf.sample(&mut rng) as u64));
     }
     let elapsed = before.elapsed();
@@ -152,6 +165,8 @@ fn main() {
         elapsed / ITERATIONS as u32,
         (ITERATIONS as f32 / elapsed.as_secs_f32()) as u32
     );
+
+    println!("--------------------");
 
     // concurrent
     let wg = Barrier::new(THREADS);
@@ -245,6 +260,33 @@ fn main() {
                 wg.wait();
                 let before = Instant::now();
                 for _ in 0..ITERATIONS {
+                    tinyufo_fast.get(&(zipf.sample(&mut rng) as u64));
+                }
+                let elapsed = before.elapsed();
+                println!(
+                    "tinyufo fast read total {elapsed:?}, {:?} avg per operation, {} ops per second",
+                    elapsed / ITERATIONS as u32,
+                    (ITERATIONS as f32 / elapsed.as_secs_f32()) as u32
+                );
+            });
+        }
+    });
+    let elapsed = before.elapsed();
+    println!(
+        "total {} ops per second",
+        (ITERATIONS as f32 * THREADS as f32 / elapsed.as_secs_f32()) as u32
+    );
+
+    let wg = Barrier::new(THREADS);
+    let before = Instant::now();
+    thread::scope(|s| {
+        for _ in 0..THREADS {
+            s.spawn(|| {
+                let mut rng = rand::rng();
+                let zipf = rand_distr::Zipf::new(ITEMS as f64, 1.03).unwrap();
+                wg.wait();
+                let before = Instant::now();
+                for _ in 0..ITERATIONS {
                     tinyufo.get(&(zipf.sample(&mut rng) as u64));
                 }
                 let elapsed = before.elapsed();
@@ -288,6 +330,8 @@ fn main() {
         "total {} ops per second",
         (ITERATIONS as f32 * THREADS as f32 / elapsed.as_secs_f32()) as u32
     );
+
+    println!("--------------------");
 
     ///// bench mixed read and write /////
     const CACHE_SIZE: usize = 1000;
@@ -390,6 +434,40 @@ fn main() {
             });
         }
     });
+    let elapsed = before.elapsed();
+    println!(
+        "total {} ops per second",
+        (ITERATIONS as f32 * THREADS as f32 / elapsed.as_secs_f32()) as u32
+    );
+
+    let tinyufo_fast = tinyufo::TinyUfo::new_fast(CACHE_SIZE, CACHE_SIZE);
+    let wg = Barrier::new(THREADS);
+    let before = Instant::now();
+    thread::scope(|s| {
+        for _ in 0..THREADS {
+            s.spawn(|| {
+                let mut miss_count = 0;
+                let mut rng = rand::rng();
+                let zipf = rand_distr::Zipf::new(items as f64, ZIPF_EXP).unwrap();
+                wg.wait();
+                let before = Instant::now();
+                for _ in 0..ITERATIONS {
+                    let key = zipf.sample(&mut rng) as u64;
+                    if tinyufo_fast.get(&key).is_none() {
+                        tinyufo_fast.put(key, (), 1);
+                        miss_count +=1;
+                    }
+                }
+                let elapsed = before.elapsed();
+                println!(
+                    "tinyufo fast mixed read/write {elapsed:?}, {:?} avg per operation, {} ops per second, {miss_count} misses",
+                    elapsed / ITERATIONS as u32,
+                    (ITERATIONS as f32 / elapsed.as_secs_f32()) as u32,
+                );
+            });
+        }
+    });
+
     let elapsed = before.elapsed();
     println!(
         "total {} ops per second",

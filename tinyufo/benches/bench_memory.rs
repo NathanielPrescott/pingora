@@ -68,6 +68,22 @@ fn bench_quick_cache(zip_exp: f64, items: usize, cache_size_percent: f32) {
     }
 }
 
+fn bench_tinyufo_fast(zip_exp: f64, items: usize, cache_size_percent: f32) {
+    let cache_size = (cache_size_percent * items as f32).round() as usize;
+    let tinyufo = tinyufo::TinyUfo::new_fast(cache_size, (cache_size as f32 * 1.0) as usize);
+
+    let mut rng = rand::rng();
+    let zipf = rand_distr::Zipf::new(items as f64, zip_exp).unwrap();
+
+    for _ in 0..ITERATIONS {
+        let key = zipf.sample(&mut rng) as u64;
+
+        if tinyufo.get(&key).is_none() {
+            tinyufo.put(key, (), 1);
+        }
+    }
+}
+
 fn bench_tinyufo(zip_exp: f64, items: usize, cache_size_percent: f32) {
     let cache_size = (cache_size_percent * items as f32).round() as usize;
     let tinyufo = tinyufo::TinyUfo::new(cache_size, (cache_size as f32 * 1.0) as usize);
@@ -159,6 +175,12 @@ fn main() {
             let _profiler = dhat::Profiler::new_heap();
             bench_quick_cache(1.05, items, 0.1);
             println!("\nQuickCache");
+        }
+
+        {
+            let _profiler = dhat::Profiler::new_heap();
+            bench_tinyufo_fast(1.05, items, 0.1);
+            println!("\nTinyUFO Fast");
         }
 
         {
