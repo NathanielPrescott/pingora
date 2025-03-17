@@ -25,6 +25,7 @@ fn bench_one(zip_exp: f64, cache_size_percent: f32) {
     let moka = moka::sync::Cache::new(cache_size as u64);
     let quick_cache = quick_cache::sync::Cache::new(cache_size);
     let tinyufo = tinyufo::TinyUfo::new(cache_size, cache_size);
+    let tinyufo_compact = tinyufo::TinyUfo::new_compact(cache_size, cache_size);
 
     let mut rng = rand::rng();
     let zipf = rand_distr::Zipf::new(ITEMS as f64, zip_exp).unwrap();
@@ -33,6 +34,7 @@ fn bench_one(zip_exp: f64, cache_size_percent: f32) {
     let mut moka_hit = 0;
     let mut quick_cache_hit = 0;
     let mut tinyufo_hit = 0;
+    let mut tinyufo_compact_hit = 0;
 
     for _ in 0..ITERATIONS {
         let key = zipf.sample(&mut rng) as u64;
@@ -60,6 +62,12 @@ fn bench_one(zip_exp: f64, cache_size_percent: f32) {
         } else {
             tinyufo.put(key, (), 1);
         }
+
+        if tinyufo_compact.get(&key).is_some() {
+            tinyufo_compact_hit += 1;
+        } else {
+            tinyufo_compact.put(key, (), 1);
+        }
     }
 
     print!("{:.2}%\t\t", lru_hit as f32 / ITERATIONS as f32 * 100.0);
@@ -68,7 +76,11 @@ fn bench_one(zip_exp: f64, cache_size_percent: f32) {
         "{:.2}%\t\t",
         quick_cache_hit as f32 / ITERATIONS as f32 * 100.0
     );
-    println!("{:.2}%", tinyufo_hit as f32 / ITERATIONS as f32 * 100.0);
+    print!("{:.2}%\t\t", tinyufo_hit as f32 / ITERATIONS as f32 * 100.0);
+    println!(
+        "{:.2}%",
+        tinyufo_compact_hit as f32 / ITERATIONS as f32 * 100.0
+    );
 }
 
 /*
@@ -103,7 +115,7 @@ zipf & cache size               lru             moka            QuickC          
  */
 
 fn main() {
-    println!("zipf & cache size\t\tlru\t\tmoka\t\tQuickC\t\tTinyUFO",);
+    println!("zipf & cache size\t\tlru\t\tmoka\t\tQuickC\t\tTinyUFO\t\tTinyUFO Compact",);
     for zif_exp in [0.9, 1.0, 1.05, 1.1, 1.5] {
         for cache_capacity in [0.005, 0.01, 0.05, 0.1, 0.25] {
             bench_one(zif_exp, cache_capacity);

@@ -20,6 +20,7 @@
 
 use ahash::RandomState;
 use crossbeam_queue::SegQueue;
+use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::atomic::{
     AtomicBool, AtomicU8, AtomicUsize,
@@ -111,7 +112,7 @@ type Key = u64;
 type Weight = u16;
 
 /// The key-value pair returned from cache eviction
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct KV<T> {
     /// NOTE: that we currently don't store the Actual key in the cache. This returned value
     /// is just the hash of it.
@@ -121,7 +122,7 @@ pub struct KV<T> {
 }
 
 // the data and its metadata
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Bucket<T> {
     uses: Uses,
     queue: Location,
@@ -131,6 +132,7 @@ pub struct Bucket<T> {
 
 const SMALL_QUEUE_PERCENTAGE: f32 = 0.1;
 
+#[derive(Debug)]
 struct FiFoQueues<T> {
     total_weight_limit: usize,
 
@@ -146,7 +148,7 @@ struct FiFoQueues<T> {
     _t: PhantomData<T>,
 }
 
-impl<T: Clone + Send + Sync + 'static> FiFoQueues<T> {
+impl<T: Clone + Send + Sync + 'static + Debug> FiFoQueues<T> {
     fn admit(
         &self,
         key: Key,
@@ -252,6 +254,7 @@ impl<T: Clone + Send + Sync + 'static> FiFoQueues<T> {
         } else {
             vec![]
         };
+
         while self.total_weight_limit
             < self.small_weight.load(SeqCst) + self.main_weight.load(SeqCst) + extra_weight as usize
         {
@@ -355,13 +358,14 @@ impl<T: Clone + Send + Sync + 'static> FiFoQueues<T> {
 }
 
 /// [TinyUfo] cache
-pub struct TinyUfo<K, T> {
+#[derive(Debug)]
+pub struct TinyUfo<K, T: Clone + 'static> {
     queues: FiFoQueues<T>,
     buckets: Buckets<T>,
     random_status: RandomState,
     _k: PhantomData<K>,
 }
-impl<K: Hash, T: Clone + Send + Sync + 'static> TinyUfo<K, T> {
+impl<K: Hash, T: Clone + Send + Sync + 'static + Debug> TinyUfo<K, T> {
     /// Create a new TinyUfo cache with the given weight limit and the given
     /// size limit of the ghost queue.
     pub fn new(total_weight_limit: usize, estimated_size: usize) -> Self {

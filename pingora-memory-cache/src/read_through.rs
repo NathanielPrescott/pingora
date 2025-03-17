@@ -22,12 +22,14 @@ use log::warn;
 use parking_lot::RwLock;
 use pingora_error::{Error, ErrorTrait};
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
 
+#[derive(Debug)]
 struct CacheLock {
     pub lock_start: Instant,
     pub lock: Semaphore,
@@ -107,10 +109,11 @@ const LOOKUP_ERR_MSG: &str = "RTCache: lookup error";
 ///
 /// Lookup coalescing is provided so that multiple concurrent lookups for the same key results
 /// only in one lookup callback.
+#[derive(Debug)]
 pub struct RTCache<K, T, CB, S>
 where
     K: Hash + Send,
-    T: Clone + Send,
+    T: Clone + Send + 'static + Debug,
 {
     inner: MemoryCache<K, T>,
     _callback: PhantomData<CB>,
@@ -123,7 +126,7 @@ where
 impl<K, T, CB, S> RTCache<K, T, CB, S>
 where
     K: Hash + Send,
-    T: Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static + Debug,
 {
     /// Create a new [RTCache] of given size. `lock_age` defines how long a lock is valid for.
     /// `lock_timeout` is used to stop a lookup from holding on to the key for too long.
@@ -142,7 +145,7 @@ where
 impl<K, T, CB, S> RTCache<K, T, CB, S>
 where
     K: Hash + Send,
-    T: Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static + Debug,
     CB: Lookup<K, T, S>,
 {
     /// Query the cache for a given value. If it exists and no TTL is configured initially, it will
@@ -309,7 +312,7 @@ where
 impl<K, T, CB, S> RTCache<K, T, CB, S>
 where
     K: Hash + Clone + Send + Sync,
-    T: Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static + Debug,
     S: Clone + Send + Sync,
     CB: Lookup<K, T, S> + Sync + Send,
 {
@@ -342,7 +345,7 @@ where
 impl<K, T, CB, S> RTCache<K, T, CB, S>
 where
     K: Hash + Send,
-    T: Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static + Debug,
     CB: MultiLookup<K, T, S>,
 {
     /// Same behavior as [RTCache::get] but for an arbitrary amount of keys.

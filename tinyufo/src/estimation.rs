@@ -13,9 +13,11 @@
 // limitations under the License.
 
 use ahash::RandomState;
+use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 
+#[derive(Debug)]
 struct Estimator {
     estimator: Box<[(Box<[AtomicU8]>, RandomState)]>,
 }
@@ -133,6 +135,7 @@ fn incr_no_overflow(var: &AtomicU8) -> (u8, u8) {
 }
 
 // bare-minimum TinyLfu with CM-Sketch, no doorkeeper for now
+#[derive(Debug)]
 pub(crate) struct TinyLfu {
     estimator: Estimator,
     window_counter: AtomicUsize,

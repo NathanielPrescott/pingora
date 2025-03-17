@@ -14,6 +14,8 @@
 
 //! Concurrent storage backend
 
+use std::fmt::Debug;
+
 use super::{Bucket, Key};
 use ahash::RandomState;
 use crossbeam_skiplist::{map::Entry, SkipMap};
@@ -21,9 +23,10 @@ use scc::HashIndex;
 
 /// N-shard skip list. Memory efficient, constant time lookup on average, but a bit slower
 /// than hash map
+#[derive(Debug)]
 pub struct Compact<T>(Box<[SkipMap<Key, Bucket<T>>]>);
 
-impl<T: Send + 'static> Compact<T> {
+impl<T: Send + 'static + Debug> Compact<T> {
     /// Create a new [Compact]
     pub fn new(total_items: usize, items_per_shard: usize) -> Self {
         assert!(items_per_shard > 0);
@@ -46,6 +49,10 @@ impl<T: Send + 'static> Compact<T> {
         v.map(f)
     }
 
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
     fn insert(&self, key: Key, value: Bucket<T>) -> Option<()> {
         let shard = key as usize % self.0.len();
         let removed = self.0[shard].remove(&key);
@@ -60,9 +67,10 @@ impl<T: Send + 'static> Compact<T> {
 }
 
 // Concurrent hash map, fast but use more memory
-pub struct Fast<T>(HashIndex<Key, Bucket<T>, RandomState>);
+#[derive(Debug)]
+pub struct Fast<T: Clone + 'static>(HashIndex<Key, Bucket<T>, RandomState>);
 
-impl<T: Send + Sync + 'static + Clone> Fast<T> {
+impl<T: Send + Sync + 'static + Clone + Debug> Fast<T> {
     pub fn new(total_items: usize) -> Self {
         Self(HashIndex::with_capacity_and_hasher(
             total_items,
@@ -71,8 +79,11 @@ impl<T: Send + Sync + 'static + Clone> Fast<T> {
     }
 
     pub fn get_map<V, F: FnOnce(&Bucket<T>) -> V>(&self, key: &Key, f: F) -> Option<V> {
-        let guard = scc::ebr::Guard::new();
-        self.0.peek(&key.clone(), &guard).map(|v| f(v))
+        self.0.peek_with(&key.clone(), |_, v| f(v))
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
     }
 
     fn insert(&self, key: Key, value: Bucket<T>) -> Option<()> {
@@ -87,12 +98,13 @@ impl<T: Send + Sync + 'static + Clone> Fast<T> {
     }
 }
 
-pub enum Buckets<T> {
+#[derive(Debug)]
+pub enum Buckets<T: Clone + 'static> {
     Fast(Box<Fast<T>>),
     Compact(Compact<T>),
 }
 
-impl<T: Send + Sync + 'static + Clone> Buckets<T> {
+impl<T: Send + Sync + 'static + Clone + Debug> Buckets<T> {
     pub fn new_fast(items: usize) -> Self {
         Self::Fast(Box::new(Fast::new(items)))
     }
@@ -119,6 +131,13 @@ impl<T: Send + Sync + 'static + Clone> Buckets<T> {
         match self {
             Self::Compact(c) => c.get_map(key, |v| f(v.value())),
             Self::Fast(c) => c.get_map(key, f),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Compact(c) => c.len(),
+            Self::Fast(f) => f.len(),
         }
     }
 

@@ -14,6 +14,7 @@
 
 use ahash::RandomState;
 use std::borrow::Borrow;
+use std::fmt::Debug;
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::time::{Duration, Instant};
@@ -69,12 +70,12 @@ impl CacheStatus {
 }
 
 #[derive(Debug, Clone)]
-struct Node<T: Clone> {
+struct Node<T: Clone + Debug> {
     pub value: T,
     expire_on: Option<Instant>,
 }
 
-impl<T: Clone> Node<T> {
+impl<T: Clone + Debug> Node<T> {
     fn new(value: T, ttl: Option<Duration>) -> Self {
         let expire_on = match ttl {
             Some(t) => Instant::now().checked_add(t),
@@ -102,13 +103,14 @@ impl<T: Clone> Node<T> {
 }
 
 /// A high performant in-memory cache with S3-FIFO + TinyLFU
-pub struct MemoryCache<K: Hash, T: Clone> {
+#[derive(Debug)]
+pub struct MemoryCache<K: Hash, T: Clone + Send + 'static + Debug> {
     store: TinyUfo<u64, Node<T>>,
     _key_type: PhantomData<K>,
     pub(crate) hasher: RandomState,
 }
 
-impl<K: Hash, T: Clone + Send + Sync + 'static> MemoryCache<K, T> {
+impl<K: Hash, T: Clone + Send + Sync + 'static + Debug> MemoryCache<K, T> {
     /// Create a new [MemoryCache] with the given size.
     pub fn new(size: usize) -> Self {
         MemoryCache {
