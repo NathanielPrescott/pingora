@@ -19,6 +19,7 @@ use std::fmt::Debug;
 use super::{Bucket, Key};
 use ahash::RandomState;
 use crossbeam_skiplist::{map::Entry, SkipMap};
+use flurry::HashMap;
 use scc::HashIndex;
 
 /// N-shard skip list. Memory efficient, constant time lookup on average, but a bit slower
@@ -68,6 +69,38 @@ impl<T: Send + 'static + Debug> Compact<T> {
 
 // Concurrent hash map, fast but use more memory
 #[derive(Debug)]
+pub struct Baseline<T>(HashMap<Key, Bucket<T>, RandomState>);
+
+impl<T: Send + Sync> Baseline<T> {
+    pub fn new(total_items: usize) -> Self {
+        Self(HashMap::with_capacity_and_hasher(
+            total_items,
+            RandomState::new(),
+        ))
+    }
+
+    pub fn get_map<V, F: FnOnce(&Bucket<T>) -> V>(&self, key: &Key, f: F) -> Option<V> {
+        let pinned = self.0.pin();
+        let v = pinned.get(key);
+        v.map(f)
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    fn insert(&self, key: Key, value: Bucket<T>) -> Option<()> {
+        let pinned = self.0.pin();
+        pinned.insert(key, value).map(|_| ())
+    }
+
+    fn remove(&self, key: &Key) {
+        let pinned = self.0.pin();
+        pinned.remove(key);
+    }
+}
+
+#[derive(Debug)]
 pub struct Fast<T: Clone + 'static>(HashIndex<Key, Bucket<T>, RandomState>);
 
 impl<T: Send + Sync + 'static + Clone + Debug> Fast<T> {
@@ -101,12 +134,17 @@ impl<T: Send + Sync + 'static + Clone + Debug> Fast<T> {
 #[derive(Debug)]
 pub enum Buckets<T: Clone + 'static> {
     Fast(Box<Fast<T>>),
+    Baseline(Box<Baseline<T>>),
     Compact(Compact<T>),
 }
 
 impl<T: Send + Sync + 'static + Clone + Debug> Buckets<T> {
     pub fn new_fast(items: usize) -> Self {
         Self::Fast(Box::new(Fast::new(items)))
+    }
+
+    pub fn new(items: usize) -> Self {
+        Self::Baseline(Box::new(Baseline::new(items)))
     }
 
     pub fn new_compact(items: usize, items_per_shard: usize) -> Self {
@@ -116,6 +154,7 @@ impl<T: Send + Sync + 'static + Clone + Debug> Buckets<T> {
     pub fn insert(&self, key: Key, value: Bucket<T>) -> Option<()> {
         match self {
             Self::Compact(c) => c.insert(key, value),
+            Self::Baseline(b) => b.insert(key, value),
             Self::Fast(f) => f.insert(key, value),
         }
     }
@@ -123,20 +162,23 @@ impl<T: Send + Sync + 'static + Clone + Debug> Buckets<T> {
     pub fn remove(&self, key: &Key) {
         match self {
             Self::Compact(c) => c.remove(key),
+            Self::Baseline(b) => b.remove(key),
             Self::Fast(f) => f.remove(key),
         }
     }
 
-    pub fn get_map<V, F: FnOnce(&Bucket<T>) -> V>(&self, key: &Key, f: F) -> Option<V> {
+    pub fn get_map<V, F: FnOnce(&Bucket<T>) -> V>(&self, key: &Key, fo: F) -> Option<V> {
         match self {
-            Self::Compact(c) => c.get_map(key, |v| f(v.value())),
-            Self::Fast(c) => c.get_map(key, f),
+            Self::Compact(c) => c.get_map(key, |v| fo(v.value())),
+            Self::Baseline(b) => b.get_map(key, fo),
+            Self::Fast(f) => f.get_map(key, fo),
         }
     }
 
     pub fn len(&self) -> usize {
         match self {
             Self::Compact(c) => c.len(),
+            Self::Baseline(b) => b.len(),
             Self::Fast(f) => f.len(),
         }
     }

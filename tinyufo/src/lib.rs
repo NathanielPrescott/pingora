@@ -380,7 +380,7 @@ impl<K: Hash, T: Clone + Send + Sync + 'static + Debug> TinyUfo<K, T> {
         };
         TinyUfo {
             queues,
-            buckets: Buckets::new_fast(estimated_size),
+            buckets: Buckets::new(estimated_size),
             random_status: RandomState::new(),
             _k: PhantomData,
         }
