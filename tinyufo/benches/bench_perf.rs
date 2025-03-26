@@ -96,7 +96,10 @@ fn main() {
         tinyufo_compact.put(i as u64, (), 1);
     }
 
-    // single thread
+    println!("\n--------------------------");
+    println!("---Single Thread (Read)---");
+    println!("--------------------------");
+    
     let mut rng = rand::rng();
     let zipf = rand_distr::Zipf::new(ITEMS as f64, 1.03).unwrap();
 
@@ -166,9 +169,11 @@ fn main() {
         (ITERATIONS as f32 / elapsed.as_secs_f32()) as u32
     );
 
-    println!("--------------------");
-
-    // concurrent
+    
+    println!("\n-------------------------");
+    println!("---Multi-Thread (Read)---");
+    println!("-------------------------");
+    
     let wg = Barrier::new(THREADS);
     let before = Instant::now();
     thread::scope(|s| {
@@ -331,9 +336,11 @@ fn main() {
         (ITERATIONS as f32 * THREADS as f32 / elapsed.as_secs_f32()) as u32
     );
 
-    println!("--------------------");
+    
+    println!("\n---------------------------------");
+    println!("---Multi-Thread (Read & Write)---");
+    println!("---------------------------------");
 
-    ///// bench mixed read and write /////
     const CACHE_SIZE: usize = 1000;
     let items: usize = 10000;
     const ZIPF_EXP: f64 = 1.3;

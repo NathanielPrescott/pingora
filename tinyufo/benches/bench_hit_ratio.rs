@@ -85,7 +85,7 @@ fn bench_one(zip_exp: f64, cache_size_percent: f32) {
         quick_cache_hit as f32 / ITERATIONS as f32 * 100.0
     );
     print!(
-        "{:.2}%\t\t",
+        "{:.2}%\t\t\t",
         tinyufo_fast_hit as f32 / ITERATIONS as f32 * 100.0
     );
     print!("{:.2}%\t\t", tinyufo_hit as f32 / ITERATIONS as f32 * 100.0);

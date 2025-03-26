@@ -121,8 +121,8 @@ impl<T: Send + Sync + 'static + Clone + Debug> Fast<T> {
 
     fn insert(&self, key: Key, value: Bucket<T>) -> Option<()> {
         match self.0.insert(key, value) {
-            Ok(_) => Some(()),
-            Err(_) => None,
+            Ok(_) => None,
+            Err(_) => Some(()),
         }
     }
 
@@ -175,6 +175,7 @@ impl<T: Send + Sync + 'static + Clone + Debug> Buckets<T> {
         }
     }
 
+    // Used for debugging
     pub fn len(&self) -> usize {
         match self {
             Self::Compact(c) => c.len(),
@@ -211,6 +212,26 @@ mod tests {
 
         fast.remove(&1);
         assert!(fast.get_map(&1, |_| ()).is_none());
+    }
+
+    #[test]
+    fn test_baseline() {
+        let baseline = Buckets::new(10);
+
+        assert!(baseline.get_map(&1, |_| ()).is_none());
+
+        let bucket = Bucket {
+            queue: crate::Location::new_small(),
+            weight: 1,
+            uses: Default::default(),
+            data: 1,
+        };
+        baseline.insert(1, bucket);
+
+        assert_eq!(baseline.get_map(&1, |v| v.data), Some(1));
+
+        baseline.remove(&1);
+        assert!(baseline.get_map(&1, |_| ()).is_none());
     }
 
     #[test]

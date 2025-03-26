@@ -497,6 +497,10 @@ impl<K: Hash, T: Clone + Send + Sync + 'static + Debug> TinyUfo<K, T> {
         self.queues.admit(key, data, weight, true, &self.buckets)
     }
 
+    pub fn len(&self) -> usize {
+        self.buckets.len()
+    }
+
     #[cfg(test)]
     fn peek_queue(&self, key: K) -> Option<bool> {
         let key = self.random_status.hash_one(&key);
