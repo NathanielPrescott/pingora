@@ -112,7 +112,7 @@ impl<T: Send + Sync + 'static + Clone + Debug> Fast<T> {
     }
 
     pub fn get_map<V, F: FnOnce(&Bucket<T>) -> V>(&self, key: &Key, f: F) -> Option<V> {
-        self.0.peek_with(&key.clone(), |_, v| f(v))
+        self.0.peek_with(key, |_, v| f(v))
     }
 
     pub fn len(&self) -> usize {
